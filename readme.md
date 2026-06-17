@@ -348,7 +348,171 @@ W normalnym działaniu Odoo (przez UI / kontroler) commit dzieje się automatycz
 
 ---
 
-## 9. Mentalny model całości
+## 9. Logika biznesowa — computed fields, metody, override create()
+
+### a) Computed field — pole wyliczane automatycznie
+
+```python
+from odoo import models, fields, api
+
+class Product(models.Model):
+    _name = "hello.product"
+    _description = 'My First Product'
+
+    name = fields.Char(required=True)
+    price = fields.Float()
+    active = fields.Boolean(default=True)
+
+    price_with_tax = fields.Float(compute='_compute_price_with_tax', store=True)
+
+    @api.depends("price")
+    def _compute_price_with_tax(self):
+        for record in self:
+            record.price_with_tax = record.price * 1.23
+```
+
+| Element | Co robi |
+|---|---|
+| `compute='_compute_price_with_tax'` | Wskazuje nazwę metody liczącej wartość pola — wartość nie przychodzi z `create()`, Odoo ją wylicza. |
+| `store=True` | Zapisuje wyliczoną wartość jako prawdziwą kolumnę w bazie (umożliwia filtrowanie/sortowanie po niej w `search()`). Bez tego pole liczy się "w locie" i nie jest dostępne w domenach. |
+| `@api.depends("price")` | Mówi Odoo "przelicz to pole na nowo, gdy zmieni się `price`". Mechanizm reaktywności — działa jak `useEffect` w React, tylko dla pól bazy danych. |
+| `for record in self:` | **Kluczowy wzorzec w Odoo.** `self` w metodzie modelu to nie jeden obiekt, a recordset (zbiór rekordów) — nawet jeśli ma jeden element. Metoda musi działać dla wielu rekordów naraz, stąd zawsze pętla, nawet gdy w praktyce operujesz na jednym. |
+
+Test w shellu:
+```python
+record.price              # sprawdź obecną wartość
+record.price_with_tax       # price * 1.23
+
+record.price = 1000
+record.price_with_tax        # przeliczone automatycznie, bez ręcznego wywołania
+```
+
+### b) Własna metoda biznesowa (wywoływana ręcznie)
+
+```python
+def apply_discount(self, percent):
+    for record in self:
+        record.price = record.price * (1 - percent / 100)
+```
+
+Brak dekoratora — to zwykła metoda Pythona, nie jest powiązana z żadnym wyzwalaczem frameworku. Wywołujesz ją explicite, kiedy chcesz:
+```python
+record.apply_discount(10)   # obniża cenę o 10%
+```
+
+### c) Nadpisanie (override) `create()`
+
+```python
+@api.model_create_multi
+def create(self, vals_list):
+    records = super().create(vals_list)
+    for record in records:
+        print(f"Product created: {record.name}")
+    return records
+```
+
+| Element | Co robi |
+|---|---|
+| `@api.model_create_multi` | Deklaruje że metoda przyjmuje **listę** dictów (`vals_list`), nie jeden dict. Odoo automatycznie konwertuje wywołania z jednym dictem (`create({...})`) na listę jednoelementową, więc kod wewnątrz może bezpiecznie zakładać że dostaje listę. |
+| `super().create(vals_list)` | **Kluczowa linia.** Wywołuje oryginalną implementację `create()` z `models.Model`, która faktycznie zapisuje dane do bazy. Bez tego rekordy nigdy by nie powstały — Twoja metoda tylko by "udawała" tworzenie. |
+| `for record in records:` | `records` to recordset zwrócony przez `super().create()` — może zawierać wiele nowo utworzonych rekordów. |
+| `return records` | Musi zwrócić to co dostał z `super()`, inaczej każdy kod wołający `create()` dostanie `None` zamiast rekordu. |
+
+To jest wzorzec analogiczny do nadpisania `save()` w modelu Django — dopinasz się do **punktu w cyklu życia rekordu** (tworzenie/zapis/usunięcie), a Twój kod wykonuje się automatycznie przy każdym wywołaniu `create()`, niezależnie skąd przyszło (shell, UI, kontroler HTTP).
+
+**Gdzie zobaczysz `print()`:**
+
+| Skąd tworzysz rekord | Gdzie zobaczysz print |
+|---|---|
+| `odoo shell` | Bezpośrednio w terminalu shella (shell działa w tym samym procesie co Odoo) |
+| UI w przeglądarce | `docker compose logs web` |
+| Wywołanie kontrolera/API | `docker compose logs web` |
+
+W kodzie produkcyjnym zamiast `print()` standardem jest `_logger.info(...)` z modułu `logging` — lepiej integruje się z systemem logowania Odoo (poziomy, filtrowanie).
+
+### d) Dekoratory — kiedy który
+
+| Dekorator | Kiedy używasz | Dlaczego |
+|---|---|---|
+| `@api.depends('pole')` | Na metodach liczących computed fields | Mówi Odoo kiedy przeliczyć wartość |
+| `@api.model_create_multi` | Tylko przy nadpisywaniu `create()` | Deklaruje że metoda przyjmuje listę dictów, nie jeden dict |
+| (brak dekoratora) | Własne metody biznesowe (`apply_discount` itp.) | Zawsze operują na `self` jako recordset — to domyślny, oczekiwany kontrakt każdej metody modelu, nie wymaga specjalnego traktowania przez framework |
+| `@api.model` | Metody niezwiązane z konkretnymi rekordami | Rzadziej używane, głównie w starszym kodzie |
+
+---
+
+## 10. Relacje między modelami
+
+### Many2one — "wiele do jednego"
+
+Czytane z perspektywy modelu na którym pole definiujesz: "wiele [tego modelu] wskazuje na jeden [tamten model]".
+
+```python
+# models/category.py
+from odoo import models, fields
+
+class Category(models.Model):
+    _name = 'hello.category'
+    _description = 'Product Category'
+
+    name = fields.Char(required=True)
+```
+
+```python
+# models/product.py — dodaj pole
+category_id = fields.Many2one('hello.category', string='Category')
+```
+
+| Element | Co robi |
+|---|---|
+| `'hello.category'` | Model do którego się odwołujesz (pierwszy argument). |
+| `string='Category'` | Czysto kosmetyczna etykieta dla UI — nie ma związku z nazwą pola w Pythonie. |
+| Kolumna w SQL | `category_id`, typu integer — klasyczny foreign key, przechowuje `id` powiązanego rekordu. |
+
+**Konwencja nazewnictwa:** pola `Many2one` kończą się na `_id` (przechowują jeden ID), pola `One2many`/`Many2many` kończą się na `_ids` (przechowują wiele ID).
+
+Nie zapomnij dodać importu w `models/__init__.py`:
+```python
+from . import product
+from . import category
+```
+
+### Dostęp przez relację
+
+```python
+cat = env['hello.category'].create({'name': 'Elektronika'})
+product = env['hello.product'].create({'name': 'Laptop', 'price': 2000, 'category_id': cat.id})
+
+product.category_id          # zwraca recordset z hello.category, nie tylko liczbę
+product.category_id.name     # 'Elektronika' — ORM automatycznie "dociąga" powiązany rekord
+```
+
+Korzyść: jeśli kategoria zmieni nazwę, wszystkie produkty z tą kategorią automatycznie pokazują nową wartość — bo w `hello_product` przechowywane jest tylko ID, nie kopia tekstu. To klasyczna normalizacja bazy danych wyrażona przez ORM.
+
+### One2many — odwrotna strona relacji
+
+```python
+# w Category
+product_ids = fields.One2many('hello.product', 'category_id', string='Products')
+```
+
+Czytane jako: "jedna kategoria ma wiele produktów". **Nie tworzy kolumny w bazie** — to wirtualne pole, ORM oblicza je w locie, odpytując `hello_product` po `category_id` równym ID tej kategorii. Drugi argument (`'category_id'`) to nazwa pola Many2one po stronie modelu `hello.product`, które łączy te dwa modele.
+
+### Transakcje — błąd "InFailedSqlTransaction"
+
+Jeśli w shellu zobaczysz:
+```
+psycopg2.errors.InFailedSqlTransaction: current transaction is aborted
+```
+to znaczy że poprzednia komenda w tej sesji shella zawiodła, a PostgreSQL blokuje kolejne komendy do końca transakcji (standardowe zachowanie SQL). Napraw to:
+```python
+env.cr.rollback()
+```
+i spróbuj swojej komendy jeszcze raz.
+
+---
+
+## 11. Mentalny model całości
 
 ```
 Twój komputer                          Kontener Odoo

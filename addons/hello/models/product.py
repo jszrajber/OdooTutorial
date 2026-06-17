@@ -10,6 +10,7 @@ class Product(models.Model):
     name = fields.Char(required=True)
     price = fields.Float()
     active = fields.Boolean(default=True)
+    category_id = fields.Many2one('hello.category', string="Category")  # Relation with Category model
 
     # 'compute' indicates the root function
     # 'store' saves result in db
@@ -25,7 +26,7 @@ class Product(models.Model):
         for record in self:
             record.price = record.price * (1 - percent / 100)
 
-    @api.model_create_multi  # Decorator for multi dicts
+    @api.model_create_multi  # Decorator for multi dicts, Odoo convention
     def create(self, vals_list):
         records = super().create(vals_list)
         for record in records:
