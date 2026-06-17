@@ -1,0 +1,41 @@
+<odoo>
+    <!-- Tworzy rekord w modelu ir.ui.view — czyli "zapisuje opis wyglądu" do bazy.
+         To jest odpowiednik env['ir.ui.view'].create({...}) z shella -->
+    <record id="view_hello_product_list" model="ir.ui.view">
+
+        <!-- Czysto opisowa nazwa widoku, widoczna dla admina w Technical -> Views.
+             Konwencja: nazwa_modelu.typ_widoku -->
+        <field name="name">hello.product.list</field>
+
+        <!-- KTÓREGO modelu dotyczy ten widok. Bez tego Odoo nie wie
+             jakie pola są dostępne do wyświetlenia -->
+        <field name="model">hello.product</field>
+
+        <!-- 'arch' (architecture) to pole którego WARTOŚCIĄ jest cały
+             kawałek XML opisujący layout. To dlatego mamy XML w XML -->
+        <field name="arch" type="xml">
+
+            <!-- Mówi: "to ma być widok tabelaryczny" (lista rekordów).
+                 Mimo że nowsza dokumentacja Odoo używa <list>, w tej
+                 wersji (17.0) trzeba użyć <tree> — inaczej dostajemy
+                 ValueError: Wrong value for ir.ui.view.type: 'list' -->
+            <tree>
+
+                <!-- Każdy <field name="X"/> = jedna kolumna w tabeli.
+                     "name" odwołuje się do pola zdefiniowanego w product.py,
+                     NIE tworzy nowego pola — tylko WYŚWIETLA istniejące -->
+                <field name="name"></field>
+
+                <field name="price"></field>
+
+                <field name="price_with_tax"></field>
+
+                <!-- Pole relacyjne (Many2one) — Odoo automatycznie
+                     wyświetli tu wartość pola 'name' powiązanej kategorii,
+                     nie surowe ID -->
+                <field name="category_id"></field>
+
+            </tree>
+        </field>
+    </record>
+</odoo>
