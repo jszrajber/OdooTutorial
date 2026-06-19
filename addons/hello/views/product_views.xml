@@ -38,4 +38,95 @@
             </tree>
         </field>
     </record>
+
+
+      
+     <!-- Widok formularza -->
+     <!-- Widok jednego rekordu — używany identycznie przy tworzeniu nowego (New) i edycji istniejącego -->
+     <record id="view_hello_product_form" model="ir.ui.view">
+
+          <!-- Nazwa widoku, widoczna w Technical -> Views.
+          Konwencja: nazwa_modelu.typ_widoku (analogicznie do listy) -->
+          <field name="name">hello.product.form</field>
+
+          <!-- Którego modelu dotyczy ten widok — to ten sam hello.product
+          co przy widoku listy. Jeden model może mieć WIELE widoków
+          (listę, formularz, kanban, kalendarz...) -->
+          <field name="model">hello.product</field>
+          <field name="arch" type="xml">
+
+          <!-- Tag <form> mówi Odoo "to ma być widok formularza" —
+             czyli edycja JEDNEGO rekordu, nie tabela wielu rekordów.
+             To jest odpowiednik 'type' = 'form' w bazie ir_ui_view -->
+               <form>
+
+                    <!-- <sheet> to czysto wizualny kontener — biała "karta"
+                    na której leżą pola. Nie ma logicznego znaczenia,
+                    tylko grupuje pola estetycznie (z marginesami,
+                    wyśrodkowaniem itd.) -->
+                    <sheet>
+
+                         <!-- Pola wyświetlane jako edytowalne — domyślnie,
+                         jeśli pole nie jest computed albo readonly,
+                         można je tu zmienić i zapisać -->
+                         <field name="name"/>
+                         <field name="price"/>
+
+                         <!-- readonly="1" blokuje edycję tego pola w formularzu.
+                         Logiczne, bo price_with_tax jest WYLICZANE
+                         automatycznie przez @api.depends w product.py —
+                         edytowanie go ręcznie nie miałoby sensu,
+                         bo i tak zostałoby nadpisane przy zmianie price -->
+                         <field name="price_with_tax" readonly="1"/>
+
+                          <!-- Pole relacyjne — w formularzu Odoo automatycznie
+                         renderuje to jako dropdown/wyszukiwarkę kategorii,
+                         nie jako surowe ID -->
+                         <field name="category_id"/>
+
+                         <!-- Checkbox — bo to pole typu Boolean w modelu -->
+                         <field name="active"/>
+                    </sheet>
+               </form>
+          </field>
+     </record>
+
+
+    <!-- Action — łączy model z widokami -->
+    <!-- Mówi co zrobić po kliknięciu pozycji w Menu-->
+    <!-- Tworzy rekord w modelu ir.actions.act_window — czyli "akcja
+     otwierająca okno". To jest węzeł centralny: bez tego rekordu
+     żadne menu/przycisk nie wie JAK otworzyć Twój model -->
+    <record id="action_hello_product" model="ir.actions.act_window">
+
+          <!-- Czytelna nazwa wyświetlana jako tytuł strony/zakładki
+          w przeglądarce, gdy ktoś otworzy tę akcję -->
+          <field name="name">Products</field>
+
+           <!-- KTÓRY model ma zostać otwarty po wykonaniu tej akcji.
+          To jest właściwy "cel" — wszystko inne (widoki, menu)
+          tylko prowadzi do tego modelu -->
+          <field name="res_model">hello.product</field>
+
+          <!-- W JAKIEJ KOLEJNOŚCI udostępnić widoki zdefiniowane wcześniej.
+          Odoo czyta to jako listę rozdzieloną przecinkami:
+          najpierw pokaż widok typu 'list' (Twoja tabela produktów),
+          a po kliknięciu na wiersz — przełącz na widok typu 'form'
+          (formularz ze szczegółami jednego produktu) -->
+          <field name="view_mode">list,form</field>
+    </record>
+
+     <!-- Menu -->
+     <!-- Tworzy GŁÓWNY punkt menu w górnym pasku Odoo — np. "Sales",
+     "Inventory", "Hello" widoczne jako zakładki na samej górze.
+     Brak atrybutu 'action' — to menu samo z siebie nic nie otwiera,
+     to tylko kontener/folder na podmenu poniżej.
+     Pod spodem tworzy rekord w modelu ir.ui.menu (tak jak <record>
+     tworzy rekord w ir.ui.view), ale w skróconej, wygodniejszej składni -->
+     <menuitem id='menu_hello_root' name="Hello" />
+
+     <!-- Tworzy PODMENU, widoczne po kliknięciu na "Hello" w górnym pasku.
+     To menu MA już 'action' — czyli faktycznie robi coś po kliknięciu -->
+     <menuitem id='menu_hello_product' name="Products" parent="menu_hello_root" action="action_hello_product"/>
+
 </odoo>

@@ -512,7 +512,257 @@ i spróbuj swojej komendy jeszcze raz.
 
 ---
 
-## 11. Mentalny model całości
+## 12. UI — widoki, akcje, menu (XML)
+
+Do tego momentu wszystko działało tylko przez shell. Żeby zobaczyć dane w przeglądarce, potrzebujesz czterech nowych elementów: **widoki** (jak wyświetlić dane), **akcję** (co otworzyć), **menu** (jak się tam dostać) i **uprawnienia** (kto może to zobaczyć).
+
+### a) Czym jest XML w Odoo
+
+XML to **kolejny sposób tworzenia rekordów** w bazie — równoległy do `create()` w shellu, tylko zapisany deklaratywnie w pliku, wczytywany podczas instalacji/upgrade modułu (nie podczas `docker compose restart` — restart przeładowuje tylko kod Pythona, nie dane z XML).
+
+```xml
+<record id="view_hello_product_list" model="ir.ui.view">
+    <field name="name">hello.product.list</field>
+</record>
+```
+To jest dosłownie odpowiednik:
+```python
+env['ir.ui.view'].create({'name': 'hello.product.list'})
+```
+`id="..."` w `<record>` to **external ID** — tekstowa etykieta którą wymyślasz, żeby móc odwołać się do tego rekordu z innego miejsca w XML, zanim jeszcze ma on prawdziwe ID liczbowe z bazy.
+
+### b) Widok listy — `addons/hello/views/product_views.xml`
+
+```xml
+<odoo>
+    <record id="view_hello_product_list" model="ir.ui.view">
+        <field name="name">hello.product.list</field>
+        <field name="model">hello.product</field>
+        <field name="arch" type="xml">
+            <tree>
+                <field name="name"/>
+                <field name="price"/>
+                <field name="price_with_tax"/>
+                <field name="category_id"/>
+            </tree>
+        </field>
+    </record>
+</odoo>
+```
+
+| Element | Co robi |
+|---|---|
+| `model="ir.ui.view"` | W którym modelu systemowym ma powstać ten rekord — model przechowujący definicje wyglądu |
+| `<field name="name">` | Czysto opisowa nazwa widoku, widoczna w Technical → Views. Konwencja: `nazwa_modelu.typ_widoku` |
+| `<field name="model">` | KTÓREGO modelu dotyczy ten widok — bez tego Odoo nie wie jakie pola są dostępne |
+| `<field name="arch" type="xml">` | Pole którego WARTOŚCIĄ jest cały kawałek XML opisujący layout — XML zagnieżdżony w XML |
+| `<tree>` | Mówi "to ma być widok tabelaryczny". ⚠️ W Odoo 17.0 musi być `<tree>`, nie `<list>` — nowsza dokumentacja Odoo (18+) używa `<list>`, ale w 17.0 to rzuca `ValueError: Wrong value for ir.ui.view.type: 'list'` |
+| `<field name="name"/>` wewnątrz `<tree>` | Jedna kolumna w tabeli — odwołuje się do pola zdefiniowanego w `product.py`, **nie tworzy** nowego pola, tylko wyświetla istniejące |
+| `<field name="category_id"/>` | Pole relacyjne (Many2one) — Odoo automatycznie wyświetli wartość pola `name` powiązanej kategorii, nie surowe ID |
+
+**Skąd biorą się nagłówki kolumn:** jeśli pole w Pythonie nie ma `string=`, Odoo generuje nagłówek automatycznie z nazwy zmiennej (`price_with_tax` → "Price With Tax"). Możesz to nadpisać:
+```python
+price_with_tax = fields.Float(compute='...', store=True, string='Cena z VAT')
+```
+
+### c) Widok formularza — w tym samym pliku
+
+```xml
+<record id="view_hello_product_form" model="ir.ui.view">
+    <field name="name">hello.product.form</field>
+    <field name="model">hello.product</field>
+    <field name="arch" type="xml">
+        <form>
+            <sheet>
+                <field name="name"/>
+                <field name="price"/>
+                <field name="price_with_tax" readonly="1"/>
+                <field name="category_id"/>
+                <field name="active"/>
+            </sheet>
+        </form>
+    </field>
+</record>
+```
+
+| Element | Co robi |
+|---|---|
+| `<form>` | Widok **jednego** rekordu (nie tabela wielu) — używany identycznie przy tworzeniu nowego rekordu (przycisk "New") i przy edycji istniejącego (kliknięcie na wiersz z listy) — to **ten sam** widok w obu przypadkach, różni się tylko czy pola są puste czy wypełnione danymi |
+| `<sheet>` | Czysto wizualny kontener ("biała karta") — bez logicznego znaczenia, tylko grupuje pola estetycznie |
+| `readonly="1"` na `price_with_tax` | Blokuje ręczną edycję — logiczne, bo to pole jest WYLICZANE przez `@api.depends`, edycja ręczna i tak zostałaby nadpisana przy zmianie `price` |
+
+**Automatyczny wybór widgetu na podstawie typu pola w Pythonie:**
+
+| Typ pola w Pythonie | Domyślny widget w UI |
+|---|---|
+| `fields.Char` | pole tekstowe |
+| `fields.Float` / `fields.Integer` | pole liczbowe |
+| `fields.Boolean` | checkbox |
+| `fields.Many2one` | dropdown/wyszukiwarka |
+| `fields.Date` / `fields.Datetime` | kalendarz |
+| `fields.Selection` | dropdown z ograniczoną listą |
+
+Nie musisz nigdzie w XML wskazywać "to ma być checkbox" — Odoo sam to wie z definicji modelu. To samo dotyczy CSS/JS całej tabeli/formularza — **nie piszesz ani jednej linii frontendu**, silnik renderujący Odoo generuje to automatycznie na podstawie `arch` + typów pól.
+
+### d) Action — łącznik między menu a modelem
+
+```xml
+<record id="action_hello_product" model="ir.actions.act_window">
+    <field name="name">Products</field>
+    <field name="res_model">hello.product</field>
+    <field name="view_mode">tree,form</field>
+</record>
+```
+
+| Element | Co robi |
+|---|---|
+| `model="ir.actions.act_window"` | "Akcja otwierająca okno" — bez tego rekordu żadne menu nie wie JAK otworzyć Twój model |
+| `<field name="res_model">` | KTÓRY model ma zostać otwarty — to jest właściwy "cel" akcji |
+| `<field name="view_mode">` | W jakiej kolejności udostępnić widoki: najpierw `tree` (lista), po kliknięciu na wiersz — `form` |
+
+**Czym jest action, a czym nie jest** — to było źródłem zamieszania, więc dopowiedzenie:
+- Action **nie wyświetla wszystkich modeli które masz** — działa dla **jednego konkretnego** modelu wskazanego w `res_model`. Inny model = potrzebujesz innej, osobnej akcji
+- Action **nie decyduje ile rekordów** się pojawi — to jest zawsze dynamiczne, zależne od aktualnego stanu bazy w momencie kliknięcia (Odoo robi odpowiednik `search([])` automatycznie, w tle, niewidocznie w XML)
+- Action **inicjuje** łańcuch (menu → action → dane z bazy → widok), ale sam nie pobiera danych i nie renderuje — to robią inne mechanizmy frameworka
+
+Można ograniczyć widoczne rekordy przez `domain` na akcji (ten sam mechanizm domen co w `search()`):
+```xml
+<field name="domain">[('price', '>', 100)]</field>
+```
+
+**Skąd Odoo wie KTÓRY widok użyć**, jeśli `view_mode` podaje tylko typ (`tree`, `form`), nie konkretny `id`? Jeśli nie wskażesz explicite `view_id`, Odoo bierze **pierwszy** widok danego typu zarejestrowany dla tego modelu. Wystarcza to gdy masz jeden widok każdego typu — przy wielu widokach tego samego typu dla jednego modelu, trzeba wskazać `view_id` explicite.
+
+### e) Menu
+
+```xml
+<menuitem id="menu_hello_root" name="Hello"/>
+<menuitem id="menu_hello_product" name="Products" parent="menu_hello_root" action="action_hello_product"/>
+```
+
+| Element | Co robi |
+|---|---|
+| `<menuitem>` (pierwszy) | Główny punkt menu w pasku górnym (np. "Hello", analogicznie do "Sales", "Inventory"). Bez `action` — sam z siebie nic nie otwiera, to tylko kontener na podmenu. Skrócona składnia, pod spodem tworzy rekord w `ir.ui.menu` |
+| `<menuitem>` (drugi) | Podmenu, widoczne po kliknięciu na "Hello". MA `action` — faktycznie coś robi po kliknięciu |
+| `parent="menu_hello_root"` | Odwołanie do `id` pierwszego menuitem — umieszcza to podmenu WEWNĄTRZ niego |
+| `action="action_hello_product"` | Odwołanie do `id` akcji — po kliknięciu wykonaj tę akcję |
+
+**Bez action, menu i tak się pojawia w UI** (sam `menuitem` nie wymaga action), ale kliknięcie na niego nic nie robi — nie ma żadnej instrukcji co otworzyć.
+
+### f) Mapa zależności — co jest zależne od czego
+
+```
+menu_hello_root  (menu "Hello" w górnym pasku, sam nic nie otwiera)
+        │
+        └── menu_hello_product  (podmenu "Products", ma action)
+                │
+                ▼
+        action_hello_product  (mówi: model = hello.product, widoki = tree,form)
+                │
+                ▼ (Odoo automatycznie szuka widoków tego typu dla tego modelu —
+                │  dopasowanie przez pole 'model', NIE przez explicit odwołanie do id)
+                │
+        ┌───────┴────────┐
+        ▼                ▼
+view_hello_product_list   view_hello_product_form
+   (otwiera się PIERWSZY)   (otwiera się po kliknięciu na wiersz)
+```
+
+Kluczowy mechanizm: akcja **nigdy explicite nie mówi** "użyj widoku o id=X" — łączy widoki z akcją poprzez wspólne pole `model="hello.product"` obecne w każdym z nich.
+
+### g) Rejestracja w manifeście
+
+Pliki `.py` rejestrujesz przez import w `__init__.py`. Pliki **XML** (i CSV z security) rejestrujesz inaczej — w manifeście, liście `data`:
+
+```python
+'data': [
+    'security/ir.model.access.csv',
+    'views/product_views.xml',
+],
+```
+
+To są dwa **zupełnie różne mechanizmy ładowania**: Python ładowany jest przez import przy starcie serwera, XML/CSV ładowany jest przez Odoo **tylko** podczas instalacji/upgrade modułu — sam `docker compose restart` nie wystarczy, trzeba zrobić upgrade:
+```python
+env['ir.module.module'].search([('name', '=', 'hello')]).button_immediate_upgrade()
+```
+
+---
+
+## 13. Security — uprawnienia dostępu (`ir.model.access.csv`)
+
+### Dlaczego to jest potrzebne
+
+**Bez tego pliku, normalny zalogowany użytkownik nie ma prawa zobaczyć Twoich danych w przeglądarce** — Odoo chowa menu i blokuje dostęp do modelu, mimo że model i widoki istnieją w bazie. To jest niewidoczne podczas testów w shellu, bo shell działa jako superuser, który **ignoruje** reguły dostępu — problem wychodzi na jaw tylko przy testowaniu przez UI jako zwykły użytkownik.
+
+Sygnał w logach że tego brakuje:
+```
+WARNING mydb odoo.modules.loading: The models ['hello.product'] have no access rules in module hello, consider adding some...
+```
+
+### Plik `addons/hello/security/ir.model.access.csv`
+
+```csv
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_hello_product,access_hello_product,model_hello_product,base.group_user,1,1,1,1
+access_hello_category,access_hello_category,model_hello_category,base.group_user,1,1,1,1
+```
+
+### Co znaczy każda kolumna
+
+| Kolumna | Co znaczy |
+|---|---|
+| `id` | Zewnętrzny identyfikator tej reguły (jak `id` w `<record>` w XML) — wymyślasz sam |
+| `name` | Czytelna nazwa reguły, widoczna w Technical → Access Rights. Zwyczajowo taka sama jak `id` |
+| `model_id:id` | Którego modelu dotyczy reguła. Składnia: `model_` + nazwa modelu z podkreślnikami zamiast kropek — `hello.product` → `model_hello_product` |
+| `group_id:id` | Której grupie użytkowników dotyczy reguła. `base.group_user` = standardowa grupa "zwykły zalogowany użytkownik" (Internal User) |
+| `perm_read` | Czy grupa może **czytać** rekordy (1 = tak, 0 = nie) |
+| `perm_write` | Czy może **edytować** istniejące rekordy |
+| `perm_create` | Czy może **tworzyć** nowe rekordy |
+| `perm_unlink` | Czy może **usuwać** rekordy |
+
+### W skrócie, co ten plik robi
+
+To lista zasad typu "kto może co robić z danym modelem":
+```
+hello.product   +  zwykli użytkownicy  →  mogą: czytać, edytować, tworzyć, usuwać
+hello.category  +  zwykli użytkownicy  →  mogą: czytać, edytować, tworzyć, usuwać
+```
+
+### Dlaczego CSV, nie XML
+
+Jedna z niekonsekwencji Odoo — większość konfiguracji idzie przez XML, ale `ir.model.access` ma osobny, zwarty format CSV, bo to tabela z dużą liczbą powtarzalnych wierszy (każdy moduł zwykle ma wiele takich reguł, jedna na model). Odpowiednik w XML wyglądałby tak (identyczny efekt, więcej pisania):
+```xml
+<record id="access_hello_product" model="ir.model.access">
+    <field name="name">access_hello_product</field>
+    <field name="model_id" ref="model_hello_product"/>
+    <field name="group_id" ref="base.group_user"/>
+    <field name="perm_read">1</field>
+    <field name="perm_write">1</field>
+    <field name="perm_create">1</field>
+    <field name="perm_unlink">1</field>
+</record>
+```
+
+### Praktyczna uwaga
+
+W realnych modułach produkcyjnych rzadko daje się wszystkim `1,1,1,1` — zwykle różnicuje się uprawnienia (np. sprzedawcy czytają i tworzą, ale nie usuwają; menadżerowie mogą wszystko). To pierwsze miejsce gdzie projektuje się bezpieczeństwo dostępu do danych w module.
+
+### Debugowanie — błąd "Access Error" w przeglądarce
+
+Jeśli widzisz:
+```
+Access Error: You are not allowed to access [...] records.
+```
+mimo że dodałeś CSV, sprawdź w shellu czy reguła faktycznie odwołuje się do właściwej grupy:
+```python
+env['ir.model.access'].search([('name', '=', 'access_hello_product')]).group_id
+env.user.groups_id.mapped('name')          # grupy Twojego zalogowanego użytkownika
+env.ref('base.group_user').id               # ID grupy "Internal User"
+```
+Jeśli ID się zgadzają, a błąd nadal się pojawia — to zwykle **stara sesja w przeglądarce**. Hard refresh (`Cmd+Shift+R`) czasem nie wystarcza — wyloguj się i zaloguj ponownie, żeby wyczyścić sesję serwerową, nie tylko cache przeglądarki.
+
+---
+
+## 14. Mentalny model całości
 
 ```
 Twój komputer                          Kontener Odoo
@@ -525,3 +775,36 @@ Ty piszesz kod .py  →  Odoo go importuje  →  rejestruje model w bazie  →  
 ```
 
 Odoo to gotowa aplikacja (jak WordPress) — nie bibliotekę którą importujesz w swoim skrypcie. Dopisujesz do niej moduły, które Odoo samo integruje z bazą danych, HTTP i UI.
+
+### Pełny łańcuch: od pliku na dysku do kliknięcia w przeglądarce
+
+```
+Python (models/*.py)              XML (views/*.xml)            CSV (security/*.csv)
+       │                                  │                            │
+       ▼                                  ▼                            ▼
+  rejestruje model              rejestruje widoki              rejestruje uprawnienia
+  w bazie (ir.model)             (ir.ui.view) i akcję           (ir.model.access)
+       │                         (ir.actions.act_window)               │
+       │                                  │                            │
+       └──────────────┬───────────────────┴────────────────────────────┘
+                       ▼
+              wszystko ładowane przez __manifest__.py:
+              - .py przez import w __init__.py (przy starcie/restart)
+              - .xml/.csv przez listę 'data' (TYLKO przy install/upgrade)
+                       │
+                       ▼
+        menuitem (klik użytkownika w pasku górnym)
+                       │
+                       ▼
+        action (mówi: jaki model, jakie widoki, w jakiej kolejności)
+                       │
+                       ▼ (Odoo automatycznie dociąga dane — search() w tle)
+                       │
+              widok renderuje dane (tree = lista, form = jeden rekord)
+                       │
+                       ▼
+              CSS/JS/HTML generowane automatycznie przez silnik Odoo —
+              nigdy nie piszesz tego ręcznie dla podstawowego CRUD
+```
+
+Kluczowa zasada filozofii Odoo: **deklarujesz "co", framework sam decyduje "jak"**. To różni się od pisania własnego backendu (np. FastAPI + React), gdzie piszesz każdy krok explicite. W zamian za mniejszą kontrolę i przejrzystość, dostajesz kompletny, działający interfejs administracyjny (lista + formularz + uprawnienia) z minimalną ilością kodu.
