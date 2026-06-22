@@ -26,6 +26,13 @@ class Product(models.Model):
         for record in self:
             record.price = record.price * (1 - percent / 100)
 
+    # Wrapper for apply_discount — buttons in views (<button type="object"/>)
+    # can only call methods with no arguments besides self. Since apply_discount
+    # requires 'percent', this method hides that argument behind a hardcoded value.
+    def action_apply_discount_manually(self):
+        for record in self:
+            record.apply_discount(10)
+
     @api.model_create_multi  # Decorator for multi dicts, Odoo convention
     def create(self, vals_list):
         records = super().create(vals_list)

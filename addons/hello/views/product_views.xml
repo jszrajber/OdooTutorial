@@ -60,6 +60,20 @@
              To jest odpowiednik 'type' = 'form' w bazie ir_ui_view -->
                <form>
 
+                    <!-- Kontener na przyciski akcji, renderowany jako pasek NAD <sheet>.
+                    To standardowe miejsce w Odoo na przyciski typu "Confirm", "Cancel",
+                    "Apply Discount" — analogicznie do paska narzędzi -->
+                    <header>
+
+                         <!-- Nazwa metody Pythona do wywołania — MUSI dokładnie zgadzać się
+                         z nazwą metody zdefiniowaną w product.py. Jeśli się nie zgadza,
+                         Odoo zgłosi błąd przy próbie kliknięcia -->
+                         <button name="action_apply_discount_manually"
+                              string="Apply 10% Discount"
+                              type="object"
+                              class='btn-primary'/>
+                    </header>
+
                     <!-- <sheet> to czysto wizualny kontener — biała "karta"
                     na której leżą pola. Nie ma logicznego znaczenia,
                     tylko grupuje pola estetycznie (z marginesami,

@@ -762,7 +762,195 @@ Jeśli ID się zgadzają, a błąd nadal się pojawia — to zwykle **stara sesj
 
 ---
 
-## 14. Mentalny model całości
+## 15. Przyciski akcji w formularzu
+
+### Problem: przyciski wywołują metody bez argumentów
+
+Przyciski w widoku (`<button type="object"/>`) mogą wywołać **tylko** metodę, która:
+1. Nie przyjmuje żadnych argumentów poza `self`
+2. Zwraca `None`, albo specjalny obiekt typu "akcja" (np. otwarcie innego okna)
+
+Jeśli Twoja istniejąca metoda **wymaga** argumentu:
+```python
+def apply_discount(self, percent):
+    for record in self:
+        record.price = record.price * (1 - percent / 100)
+```
+nie możesz jej podłączyć wprost pod przycisk — XML nie ma mechanizmu na przekazanie `percent` z `<button>`.
+
+### Rozwiązanie: metoda-wrapper
+
+```python
+# Wrapper for apply_discount — buttons in views (<button type="object"/>)
+# can only call methods with no arguments besides self. Since apply_discount
+# requires 'percent', this method hides that argument behind a hardcoded value.
+def action_apply_discount_manually(self):
+    for record in self:
+        record.apply_discount(10)
+```
+
+**Konwencja nazewnictwa:** prefiks `action_` na metodach wywoływanych z przycisków w UI to standard w Odoo (nie wymóg techniczny, ale szeroko przyjęta konwencja) — odróżnia "metody do wywołania z przycisku" od metod wewnętrznych jak `apply_discount` czy `_compute_price_with_tax`.
+
+**Alternatywne podejścia**, jeśli `percent` powinien być zmienny, nie zahardkodowany:
+- **Wizard (TransientModel)** — przycisk otwiera okienko dialogowe, użytkownik wpisuje wartość, klika "Zastosuj". Częsty wzorzec w realnych modułach (np. "Zarejestruj płatność" na fakturach)
+- **Dodatkowe pole na formularzu** — np. `discount_percent = fields.Float(default=10)`, a metoda czyta wartość z `record.discount_percent` zamiast hardkodować
+
+### Dodanie przycisku w widoku formularza
+
+```xml
+<record id="view_hello_product_form" model="ir.ui.view">
+    <field name="name">hello.product.form</field>
+    <field name="model">hello.product</field>
+    <field name="arch" type="xml">
+        <form>
+            <!-- Kontener na przyciski akcji, renderowany jako pasek NAD <sheet>.
+                 Standardowe miejsce w Odoo na przyciski typu "Confirm", "Cancel",
+                 "Apply Discount" — analogicznie do paska narzędzi -->
+            <header>
+                <button
+                    name="action_apply_discount_manually"
+                    string="Apply 10% Discount"
+                    type="object"
+                    class="btn-primary"/>
+            </header>
+            <sheet>
+                <field name="name"/>
+                <field name="price"/>
+                <field name="price_with_tax" readonly="1"/>
+                <field name="category_id"/>
+                <field name="active"/>
+            </sheet>
+        </form>
+    </field>
+</record>
+```
+
+| Atrybut przycisku | Co robi |
+|---|---|
+| `name="action_apply_discount_manually"` | Nazwa metody Pythona do wywołania — **musi** dokładnie zgadzać się z nazwą metody w `product.py` |
+| `string="Apply 10% Discount"` | Tekst widoczny na przycisku w UI |
+| `type="object"` | Wywołaj metodę na obiekcie modelu — czyli na konkretnym rekordzie aktualnie otwartym w formularzu. Najczęstszy typ (istnieje też `type="action"` dla wywołania innej akcji) |
+| `class="btn-primary"` | Standardowa klasa Bootstrapa (Odoo używa Bootstrapa pod spodem) — wyróżnia przycisk kolorem |
+
+### Dlaczego przycisk w `<form>`, nie w `<tree>`
+
+Przycisk **operuje na jednym, konkretnym rekordzie** — `self` wewnątrz wywołanej metody to ten jeden rekord aktualnie otwarty w formularzu. W widoku `<tree>` (lista) nie ma tego jednoznacznego kontekstu — patrzysz na wiele rekordów naraz, więc "kliknięcie przycisku" nie miałoby oczywistego znaczenia (który rekord ma dostać akcję?).
+
+Zasada: **przycisk zawsze operuje na konkretnym rekordzie, nigdy na całej tabeli w sposób niejednoznaczny**. Odoo wspiera też przyciski w `<tree>` (renderowane jako kolumna, jeden przycisk per wiersz), ale koncepcyjnie to wciąż "jeden rekord", tylko inaczej osadzony wizualnie.
+
+Po dodaniu przycisku — upgrade i test:
+```python
+env['ir.module.module'].search([('name', '=', 'hello')]).button_immediate_upgrade()
+```
+Otwórz formularz produktu w przeglądarce, kliknij przycisk, sprawdź czy `price` spadło o 10% i czy `price_with_tax` przeliczyło się automatycznie (dzięki `@api.depends`).
+
+---
+
+## 16. XML-RPC — dostęp do Odoo z zewnątrz
+
+### Po co to istnieje
+
+Do tego momentu pracowałeś z Odoo z **wewnątrz** — przez shell (gdzie `env` jest gotowe od razu) albo przez UI w przeglądarce. XML-RPC to **trzeci, zupełnie inny kanał**: pozwala napisać **osobny skrypt Pythona** (poza Dockerem, na swoim komputerze), który łączy się z Odoo przez sieć, tak jak zrobiłaby to inna, niezależna aplikacja.
+
+Odoo **nie ma natywnego REST API** — XML-RPC (starszy protokół, ale wbudowany w każdą instalację Odoo) jest jedynym wbudowanym sposobem na programistyczny dostęp z zewnątrz, bez pisania własnych kontrolerów HTTP.
+
+### Dwa rodzaje danych logowania — nie pomyl ich
+
+| | PostgreSQL (kontener `db`) | Odoo (kontener `web`) |
+|---|---|---|
+| Skąd pochodzi | `POSTGRES_USER`/`POSTGRES_PASSWORD` z `docker-compose.yml` | Email/hasło, które **Ty** wpisałeś w formularzu przy tworzeniu bazy `mydb` na `localhost:8069` |
+| Kto tego używa | Tylko Odoo, wewnętrznie, łącząc się z bazą — Ty tego nigdy nie wpisujesz osobiście | Ty — logując się w przeglądarce ALBO w skrypcie XML-RPC |
+| Czy potrzebne do XML-RPC | Nie | **Tak — to jest `username`/`password` w skrypcie** |
+
+Jeśli nie pamiętasz loginu/hasła do Odoo (nie do Postgresa!), sprawdź w shellu:
+```python
+env['res.users'].search([]).mapped('login')   # lista loginów (zwykle e-maile)
+```
+Hasła nie da się odczytać (zahaszowane), ale można je zresetować:
+```python
+user = env['res.users'].search([('login', '=', 'twoj_login_z_listy')])
+user.write({'password': 'nowe_haslo_testowe'})
+```
+
+### Struktura skryptu
+
+```python
+import xmlrpc.client
+
+url = 'http://localhost:8069'
+db = 'mydb'                      # nazwa bazy — tej samej, którą widzisz w `odoo shell -d mydb`
+username = 'twoj_email@example.com'
+password = 'twoje_haslo'
+
+# Krok 1: autoryzacja — osobny endpoint tylko do logowania
+common = xmlrpc.client.ServerProxy(f'{url}/xmlrpc/2/common')
+uid = common.authenticate(db, username, password, {})
+
+# Krok 2: operacje na modelach — przez endpoint 'object'
+models = xmlrpc.client.ServerProxy(f'{url}/xmlrpc/2/object')
+
+products = models.execute_kw(
+    db, uid, password,
+    'hello.product', 'search_read',
+    [[]],
+    {'fields': ['name', 'price']}
+)
+print(products)
+```
+
+### Rozbicie elementów
+
+| Element | Co robi |
+|---|---|
+| `xmlrpc.client.ServerProxy(...)` | Standardowa klasa z biblioteki Pythona `xmlrpc.client` (nic do `pip install`) — "zdalny obiekt" wskazujący na endpoint serwera |
+| `/xmlrpc/2/common` | Endpoint **tylko do autoryzacji** — `authenticate()` zwraca `uid`, numer Twojego użytkownika, potrzebny do każdego dalszego wywołania |
+| `/xmlrpc/2/object` | Endpoint do **wszystkich operacji na modelach** |
+| `execute_kw(db, uid, password, model, method, args, kwargs)` | Uniwersalna funkcja wywołująca dowolną metodę ORM: `search`, `create`, `write`, `unlink`, nawet Twoje własne metody jak `apply_discount` |
+
+### Czemu to wygląda inaczej niż ogólna dokumentacja `xmlrpc.client`
+
+Ogólna dokumentacja biblioteki Pythona pokazuje serwery, które rejestrują **dowolną, własną** metodę pod dowolną nazwą (`proxy.is_even(3)`, `proxy.today()`) — każdy serwer XML-RPC sam decyduje co udostępnia. Odoo poszło inną drogą: udostępnia tylko **dwie uniwersalne** metody (`authenticate`, `execute_kw`), gdzie `execute_kw` działa jako "dyspozytor" do całego ORM, zamiast mieć osobną zdaloną funkcję na `search`, osobną na `create` itd.
+
+| Ogólny XML-RPC (dokumentacja Pythona) | Konkretna implementacja Odoo |
+|---|---|
+| `proxy.nazwa_wlasnej_metody(argumenty)` | `proxy.execute_kw(db, uid, password, model, orm_metoda, args)` |
+| Serwer może zarejestrować cokolwiek | Odoo rejestruje tylko 2 generyczne metody |
+
+Mechanizm `ServerProxy` jest identyczny w obu przypadkach — różni się tylko to, co konkretny serwer (tu: Odoo) zdecydował udostępnić pod tym protokołem.
+
+### Porównanie z shellem — ten sam ORM, inny kanał dostępu
+
+| Shell | XML-RPC |
+|---|---|
+| `env['hello.product'].search([])` | `models.execute_kw(db, uid, password, 'hello.product', 'search', [[]])` |
+| `env['hello.product'].create({'name': 'X'})` | `models.execute_kw(db, uid, password, 'hello.product', 'create', [{'name': 'X'}])` |
+| Wewnątrz kontenera, jako superuser (ignoruje uprawnienia) | Z dowolnego miejsca z dostępem sieciowym do portu 8069, jako zwykły zalogowany user (**uprawnienia z `ir.model.access.csv` mają zastosowanie**) |
+
+### Wywołanie własnej metody przez XML-RPC
+
+```python
+models.execute_kw(
+    db, uid, password,
+    'hello.product', 'apply_discount',
+    [[1], 15]   # [lista ID rekordów], argument metody (percent=15)
+)
+```
+To wywołuje `apply_discount(15)` na rekordzie o `id=1` — ta sama metoda z `product.py`, wywołana z zewnątrz, bez dostępu do kontenera Docker.
+
+### Praktyczny scenariusz użycia
+
+```
+Twoja aplikacja (np. FastAPI, osobny serwer)
+        │
+        │  XML-RPC (przez sieć, port 8069)
+        ▼
+   Odoo (baza klientów, faktur, produktów)
+```
+Typowy przypadek: klient robi zamówienie w Twojej aplikacji → ta aplikacja przez XML-RPC **tworzy** rekord w Odoo → inny zespół (np. księgowość) widzi to natychmiast w swoim interfejsie Odoo, bez ręcznego przepisywania danych między systemami.
+
+---
+
+## 17. Mentalny model całości
 
 ```
 Twój komputer                          Kontener Odoo
